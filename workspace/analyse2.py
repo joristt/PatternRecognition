@@ -4,6 +4,7 @@ import os
 import matplotlib.pyplot as plt
 from time                  import time
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
 
 # In debug mode, only a small portion of the 629.145.481 rows from train.csv
 # will be read.
@@ -21,7 +22,7 @@ s = time()
 print("Loading data into RAM...")
 data = pd.read_csv(
 	train_path,
-	nrows=10e6 if DEBUG else None, # nrows=None causes all lines to be read.
+	nrows=10e7 if DEBUG else None, # nrows=None causes all lines to be read.
 	dtype = {
         # The seismic signal is int16, but we normalise it later on and
         # therefore we load the acoustic data as floats.
@@ -29,17 +30,19 @@ data = pd.read_csv(
 		"time_to_failure" : np.float64 # The time (s) till next earthquake.
 	}
 )
-
 print("Loaded data in %s seconds." % (time() - s))
 
 s = time()
 print("Normalising data...")
-
 # Convert pd.dataframe to normalised np.ndarray in range [0,1]
 scaler = MinMaxScaler(feature_range=(0, 1))
 data = scaler.fit_transform(data)
-
 print("Normalised data in %s seconds." % (time() - s))
+
+# Split into train and test data.
+split_i    = int((data.shape[0]) * 0.8)
+train_data = data[:split_i]
+test_data  = data[split_i:]
 
 
 # Calculate summary statistics per time step.
@@ -73,8 +76,6 @@ def quake_moments(data):
 # 	plt.show()
 
 # plott(data, 0, 20000000, 10000)
-
-
 
 def sample(data, size=100000):
     assert size <= len(data)
@@ -132,8 +133,8 @@ def generator(data):
             targets[j] = data[row, 1]
         yield samples, targets
 
-train_gen = generator(data)
-valid_gen = generator(data)
+train_gen = generator(train_data)
+valid_gen = generator(test_data)
 
 # Define model
 # os.environ["KERAS_BACKEND"] = "plaidml.keras.backend"
@@ -188,7 +189,7 @@ ttfs = np.clip(ttfs, 0, a_max=None)
 submission.time_to_failure = ttfs
 
 
-submission.to_csv("data/our_submission.csv")
+submission.to_csv("data/submission.csv")
 
 
 # loss = model.evaluate_generator(valid_gen, steps=100)
