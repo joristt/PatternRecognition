@@ -6,7 +6,7 @@ from time import time
 
 # In debug mode, only a small portion of the 629.145.481 rows from train.csv
 # will be read.
-DEBUG = False
+DEBUG = True
 
 # DATA
 # https://www.kaggle.com/c/LANL-Earthquake-Prediction/data
@@ -20,13 +20,17 @@ s = time()
 print("Loading data into RAM...")
 data = pd.read_csv(
 	train_path,
-	nrows=10e5 if DEBUG else None, # nrows=None causes all lines to be read.
+	nrows=10e7 if DEBUG else None, # nrows=None causes all lines to be read.
 	dtype = {
 		"acoustic_data"   : np.int16,  # The seismic signal
 		"time_to_failure" : np.float64 # The time (s) till next earthquake.
 
 	}
 ).values # Convert pd.dataframe to np.ndarray
+
+scaler = MinMaxScaler(feature_range=(0, 1))
+dataset = scaler.fit_transform(dataset)
+
 print("Loaded data in %s seconds." % (time() - s))
 
 # Calculate summary statistics per time step.
