@@ -182,7 +182,7 @@ ttfs = np.expand_dims(submission.time_to_failure.values, 1)
 ttfs = np.append(ttfs, ttfs, axis=1)
 ttfs = scaler.inverse_transform(ttfs)
 ttfs = np.delete(ttfs, 0, 1)
-submttion.time_to_failure = np.clip(ttfs, 0, a_max=None)
+submission.time_to_failure = np.clip(ttfs, 0, a_max=None)
 
 
 submission.to_csv("data/submission.csv")
@@ -197,8 +197,8 @@ submission.to_csv("data/submission.csv")
 # predictions = np.clip(ttfs, 0, a_max=None)
 
 
-# loss = model.evaluate_generator(valid_gen, steps=100)
-# loss2 = scaler.inverse_transform(np.array([[0,loss]]))[0][1]
+loss = model.evaluate_generator(valid_gen, steps=100)
+loss2 = scaler.inverse_transform(np.array([[0,loss]]))[0][1]
 
 
 
