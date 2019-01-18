@@ -20,7 +20,7 @@ train_path = data_dir + "train.csv"
 
 s = time()
 print("Loading data into RAM...")
-data = pd.read_csv(
+d = pd.read_csv(
 	train_path,
 	nrows=10e7 if DEBUG else None, # nrows=None causes all lines to be read.
 	dtype = {
@@ -32,17 +32,20 @@ data = pd.read_csv(
 )
 print("Loaded data in %s seconds." % (time() - s))
 
-s = time()
-print("Normalising data...")
+# s = time()
+# print("Normalising data...")
 # Convert pd.dataframe to normalised np.ndarray in range [0,1]
-scaler = MinMaxScaler(feature_range=(0, 1))
-data = scaler.fit_transform(data)
-print("Normalised data in %s seconds." % (time() - s))
+# scaler = MinMaxScaler(feature_range=(0, 1))
+# d = scaler.fit_transform(d)
+# print("Normalised data in %s seconds." % (time() - s))
 
 # Split into train and test data.
-split_i    = int((data.shape[0]) * 0.8)
-train_data = data[:split_i]
-test_data  = data[split_i:]
+split_i    = int((d.shape[0]) * 0.8)
+train_data = d[:split_i]
+
+scaler     = MinMaxScaler(feature_range=(0, 1))
+train_data = scaler.fit_transform(train_data)
+test_data  = scaler.transform(d[split_i:])
 
 
 # Calculate summary statistics per time step.
@@ -92,9 +95,7 @@ def features(data, u_bound=None, nr_subsets=150, subset_size=1000):
     nr_values = nr_subsets * subset_size
     u_bound   = u_bound or len(data)
     l_bound   = u_bound - nr_values
-    if l_bound < 0:
-        l_bound = 0
-        u_bound = 149999
+    assert l_bound >= 0
     # Reshaping and standardize approximately
     l = data[l_bound:u_bound].reshape(nr_subsets, -1)
     # Extracts features of sequences of full length 1000, of the last 100 values and finally also 
@@ -139,7 +140,7 @@ valid_gen = generator(test_data)
 # Define model
 # os.environ["KERAS_BACKEND"] = "plaidml.keras.backend"
 from keras.models import Sequential
-from keras.layers import Dense, CuDNNGRU, GRU
+from keras.layers import Dense, GRU, LSTM
 from keras.optimizers import adam
 from keras.callbacks import ModelCheckpoint
 
@@ -150,7 +151,7 @@ cb = [ModelCheckpoint("model.hdf5", monitor='val_loss', save_weights_only=False,
 
 model = Sequential()
 # NVIDIA Only: model.add(CuDNNGRU(48, input_shape=(None, nr_features)))
-model.add(GRU(48, input_shape=(150, nr_features))) # (None, nr_features)))
+model.add(LSTM(48, input_shape=(150, nr_features))) # (None, nr_features)))
 model.add(Dense(10, activation='relu'))
 model.add(Dense(1))
 
@@ -176,20 +177,24 @@ for i, seg_id in enumerate(submission.index):
     x = seg['acoustic_data'].values
     submission.time_to_failure[i] = model.predict(np.expand_dims(features(x), 0))
 
-
-
-
-
 # Invert scaling of submission.time_to_failure
 ttfs = np.expand_dims(submission.time_to_failure.values, 1)
 ttfs = np.append(ttfs, ttfs, axis=1)
 ttfs = scaler.inverse_transform(ttfs)
 ttfs = np.delete(ttfs, 0, 1)
-ttfs = np.clip(ttfs, 0, a_max=None)
-submission.time_to_failure = ttfs
+submttion.time_to_failure = np.clip(ttfs, 0, a_max=None)
 
 
 submission.to_csv("data/submission.csv")
+
+
+# # predictions = model.predict_on_batch(next(valid_gen)[0])
+# predictions=. submission.time_to_failure.values
+# ttfs = predictions
+# ttfs = np.append(ttfs, ttfs, axis=1)
+# ttfs = scaler.inverse_transform(ttfs)
+# ttfs = np.delete(ttfs, 0, 1)
+# predictions = np.clip(ttfs, 0, a_max=None)
 
 
 # loss = model.evaluate_generator(valid_gen, steps=100)
