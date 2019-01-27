@@ -1,11 +1,10 @@
-import pandas as pd
+# import pandas as pd
 import numpy  as np
 import os
-import matplotlib.pyplot as plt
-import sqlite3
+# import matplotlib.pyplot as plt
 from   time                  import time
-from   sklearn.preprocessing import MinMaxScaler
-from   sklearn.model_selection import train_test_split
+# from   sklearn.preprocessing import MinMaxScaler
+# from   sklearn.model_selection import train_test_split
 
 # In debug mode, only a small portion of the 629.145.481 rows from train.csv
 # will be read.
@@ -63,7 +62,8 @@ print("Loading data into RAM...")
 # 		"time_to_failure" : np.float64 # The time (s) till next earthquake.
 # 	}
 # )
-d = np.load("./data/train.npy")
+# train_small is train, but with col 1 multiplied by 10.000.000 and then everything was converted to float32.
+d = np.load("./data/train.npy", mmap_mode="r")
 print("Loaded data in %s seconds." % (time() - s))
 
 # s = time()
@@ -82,13 +82,18 @@ print("Loaded data in %s seconds." % (time() - s))
 # scalers[0].fit_transform(d.values[:,0])
 # scalers[1].fit_transform(d.values[:,1])
 
-# Calculate summary statistics per time step.
-def summary_statistics(z):
-	return np.c_[z.mean(axis=1), 
-	             np.median(np.abs(z), axis=1),
-	             z.std(axis=1), 
-	             z.max(axis=1),
-	             z.min(axis=1)]
+def extract_features(z):
+     return np.c_[z.mean(axis=1), 
+                  np.transpose(np.percentile(np.abs(z), q=[0, 25, 50, 75, 100], axis=1)),
+                  z.std(axis=1)]
+
+# # Calculate summary statistics per time step.
+# def summary_statistics(z):
+# 	return np.c_[z.mean(axis=1), 
+# 	             np.median(np.abs(z), axis=1),
+# 	             z.std(axis=1), 
+# 	             z.max(axis=1),
+# 	             z.min(axis=1)]
 
 def stats(z):
     return np.c_[
@@ -131,25 +136,27 @@ def sample(data, size=100000):
     )
 
 resolution = 4
-
+nr_subsets = 150
 # For a given ending position "u_bound", we split the last 150.000 values of "x" into 150 pieces of length 1000 each.
 # From each piece, 16 features are extracted. This results in a feature matrix of dimension (150 time steps x 16 features). 
 def features(data, u_bound):
     l_bound = u_bound - 150000
     assert l_bound >= 0
-    arr = np.array(data[l_bound:u_bound][::resolution])
-    return np.expand_dims(arr, 1)
+
+    # arr = np.array(data[l_bound:u_bound][::resolution])
+    # return np.expand_dims(arr, 1)
+
     # Reshaping and standardize approximately
-    # l = data[l_bound:u_bound].reshape(nr_subsets, -1)
+    l = data[l_bound:u_bound].reshape(nr_subsets, -1)
     # Extracts features of sequences of full length 1000, of the last 100 values and finally also 
     # of the last 10 observations. 
     # return stats(l)
-    # return np.c_[
-    # 	summary_statistics(l),
-    # 	summary_statistics(l[:, -subset_size // 10:]),
-    # 	summary_statistics(l[:, -subset_size // 100:]),
-    # 	l[:, -1:]
-    # ]
+    return np.c_[
+    	extract_features(l)
+    	# summary_statistics(l[:, -subset_size // 10:]),
+    	# summary_statistics(l[:, -subset_size // 100:]),
+    	# l[:, -1:]
+    ]
 
 # We call "summary_statistics" three times, so the total number of features is 3 * 5 + 1 (last value) = 16
 # nr_features = 4
@@ -163,42 +170,37 @@ def indices(mi, ma, nr, min_dist):
         vs = np.sort(np.random.randint(mi, ma, nr))
         dists = np.all(vs[1:] - vs[:-1] >= min_dist)
         return vs
-    
-
-fst = features(
-    d[:, 0],
-    u_bound     = 74803393
-)
-
 
 # The generator randomly selects "batch_size" ending positions of sub-time series. For each ending position,
 # the "time_to_failure" serves as target, while the features are created by the function "features".
 def generator(data):
     l_bound     = 0
     u_bound     = len(data) - 1
-    n_steps     = 1500
-    step_length = 100
+    step_length = 1000
 
     batch_size  = 32
     while True:
         # Pick indices of ending positions
         # rows = np.random.randint(l_bound + n_steps * step_length, u_bound, size=batch_size)
         # rows = indices(0, len(d), batch_size, 150000)
-        rows = np.random.randint(0, len(data), batch_size)
+        rows = np.random.randint(150000, len(data), size=batch_size)
         # Initialize feature matrices and targets
-        samples = np.empty((batch_size, 150000//resolution, 1)) # np.zeros((batch_size, n_steps, nr_features))
+        samples = np.empty((batch_size, nr_subsets, 7)) # np.zeros((batch_size, n_steps, nr_features))
         targets = np.empty(batch_size, )
         for j, row in enumerate(rows):
             fts = features(
                 data[:, 0],
-                u_bound     = row
+                row
             )
             samples[j] = fts
             targets[j] = data[row, 1]
         yield samples, targets
 
-train_gen = generator(d[:-len(d)//5])
-valid_gen = generator(d[-len(d)//5:])
+second_earthquake = 50085877
+# train_gen = generator(d[:-len(d)//5])
+# valid_gen = generator(d[-len(d)//5:])
+train_gen = generator(d[second_earthquake:])
+valid_gen = generator(d[:second_earthquake])
 
 
 
@@ -211,79 +213,33 @@ valid_gen = generator(d[-len(d)//5:])
 
 
 
-def resnet_layer(model,
-                 num_filters=16,
-                 kernel_size=3,
-                 strides=1,
-                 activation='relu',
-                 batch_normalization=True,
-                 conv_first=True):
-    """2D Convolution-Batch Normalization-Activation stack builder
-    # Arguments
-        inputs (tensor): input tensor from input image or previous layer
-        num_filters (int): Conv2D number of filters
-        kernel_size (int): Conv2D square kernel dimensions
-        strides (int): Conv2D square stride dimensions
-        activation (string): activation name
-        batch_normalization (bool): whether to include batch normalization
-        conv_first (bool): conv-bn-activation (True) or
-            bn-activation-conv (False)
-    # Returns
-        x (tensor): tensor as input to the next layer
-    """
-    conv = Conv2D(num_filters,
-                  kernel_size=kernel_size,
-                  strides=strides,
-                  padding='same',
-                  kernel_initializer='he_normal',
-                  kernel_regularizer=l2(1e-4))
 
-    if conv_first:
-        model.add(conv)
-        if batch_normalization:
-            model.add(BatchNormalization)
-        if activation is not None:
-            model.add(Activation(activation))
-    else:
-        if batch_normalization:
-            model(BatchNormalization)
-        if activation is not None:
-            model.add(Activation(activation))
-        model.add(conv(x))
-
-
-
-
-
-
-
-
-
+# tfmodel.compile(
+#         optimizer=tf.train.RMSPropOptimizer(learning_rate=0.01),
+#         loss='binary_crossentropy',
+#         metrics=['acc'])
 
 
 # Define model
-# os.environ["KERAS_BACKEND"] = "plaidml.keras.backend"
-from keras.models import Sequential
-from keras.layers import Dense, GRU, LSTM, Conv1D, BatchNormalization, GlobalAveragePooling1D
+from keras.models import Sequential, load_model
+from keras.layers import *
 from keras.optimizers import adam
 from keras.callbacks import ModelCheckpoint
 
 # keras.layers.CuDNNGRU(units, kernel_initializer='glorot_uniform', recurrent_initializer='orthogonal', bias_initializer='zeros', kernel_regularizer=None, recurrent_regularizer=None, bias_regularizer=None, activity_regularizer=None, kernel_constraint=None, recurrent_constraint=None, bias_constraint=None, return_sequences=False, return_state=False, stateful=False)
 # keras.layers.      GRU(units, activation='tanh', recurrent_activation='hard_sigmoid', use_bias=True, kernel_initializer='glorot_uniform', recurrent_initializer='orthogonal', bias_initializer='zeros', kernel_regularizer=None, recurrent_regularizer=None, bias_regularizer=None, activity_regularizer=None, kernel_constraint=None, recurrent_constraint=None, bias_constraint=None, dropout=0.0, recurrent_dropout=0.0, implementation=1, return_sequences=False, return_state=False, go_backwards=False, stateful=False, unroll=False, reset_after=False)
 
-cb = [ModelCheckpoint("model.hdf5", monitor='val_loss', save_weights_only=False, period=3)]
-
 model = Sequential()
 
-model.add(Conv1D(128, kernel_size=8, strides=1, input_shape=(37500, 1)))
+model.add(Conv1D(128, kernel_size=8, strides=1, input_shape=(nr_subsets, 7)))
 model.add(BatchNormalization())
 model.add(Activation("relu"))
 
-model.add(Conv1D(128, kernel_size=5, strides=1))
+model.add(Conv1D(64, kernel_size=5, strides=1))
 model.add(BatchNormalization())
 model.add(Activation("relu"))
 
-model.add(Conv1D(128, kernel_size=3, strides=1))
+model.add(Conv1D(32, kernel_size=3, strides=1))
 model.add(BatchNormalization())
 model.add(Activation("relu"))
 
@@ -292,18 +248,98 @@ model.add(GlobalAveragePooling1D())
 model.add(Dense(1))
 
 model.summary()
+model.compile(optimizer=adam(lr=0.005), loss="mae")
 
-# Compile and fit model
-model.compile(optimizer=adam(lr=0.0005), loss="mae")
 
-history = model.fit_generator(train_gen,
-                              steps_per_epoch=250,#n_train // batch_size,
-                              epochs=1,
-                              verbose=1,
-                              callbacks=cb,
-                              validation_data=valid_gen,
-                              validation_steps=25)#n_val
 
+
+# tf_model1_i = tf.keras.Input(shape=(150000//resolution, 1))
+# tf_model1_h = tf.keras.layers.BatchNormalization()(tf_model1_i)
+# tf_model1_h = tf.keras.layers.LSTM(128)(tf_model1_h)
+# tf_model1_o = tf.keras.layers.Dense(1)(tf_model1_h)
+
+# model = tf.keras.Model(inputs=tf_model1_i, outputs=tf_model1_o)
+
+
+
+
+# model1 = Sequential()
+# # model1.add(BatchNormalization(input_shape=(nr_subsets, 7)))
+# model1.add(CuDNNLSTM(64, input_shape=(nr_subsets, 7)))
+# model1.add(BatchNormalization())
+# model1.add(Dense(32))
+# model1.add(Dense(1))
+# model1.summary()
+# model1.compile(optimizer=adam(lr=0.005), loss="mae")
+
+# model2 = Sequential()
+# model2.add(LSTM(128, input_shape=(150000//resolution, 1)))
+# model2.add(Dropout(0.5))
+# model2.add(Dense(64, activation="relu"))
+# model2.add(Dense(1))
+# model2.summary()
+# model2.compile(optimizer=adam(lr=0.0005), loss="mae")
+
+# model3 = Sequential()
+# model3.add(LSTM(128, input_shape=(150000//resolution, 1)))
+# model3.add(Dropout(0.25))
+# model3.add(Dense(64, activation="relu"))
+# model3.add(Dense(1))
+# model3.summary()
+# model3.compile(optimizer=adam(lr=0.0005), loss="mae")
+
+# model4 = Sequential()
+# model4.add(LSTM(128, input_shape=(150000//resolution, 1)))
+# model4.add(Dropout(0.25))
+# model4.add(Dense(32, activation="relu"))
+# model4.add(Dense(1))
+# model4.summary()
+# model4.compile(optimizer=adam(lr=0.0005), loss="mae")
+
+# def gen_x_y(batches, gen):
+#     xs = np.empty((batches*32, 150000//resolution, 1))
+#     ys = np.empty(batches*32)
+#     for i in range(batches):
+#         x,y = next(gen)
+#         xs[i*32:(i+1)*32] = x
+#         ys[i*32:(i+1)*32] = y
+#     return xs, ys
+
+cb1 = [ModelCheckpoint("model1.hdf5", monitor='val_loss', save_weights_only=False, period=3)]
+history1 = model.fit_generator(train_gen,
+                                steps_per_epoch=250,#n_train // batch_size,
+                                epochs=30,
+                                verbose=1,
+                                # callbacks=cb1,
+                                validation_data=valid_gen,
+                                validation_steps=50)
+
+# cb2 = [ModelCheckpoint("model2.hdf5", monitor='val_loss', save_weights_only=False, period=3)]
+# history2 = model2.fit_generator(train_gen,
+#                                 steps_per_epoch=100,#n_train // batch_size,
+#                                 epochs=5,
+#                                 verbose=1,
+#                                 callbacks=cb2,
+#                                 validation_data=valid_gen,
+#                                 validation_steps=20)
+
+# cb3 = [ModelCheckpoint("model3.hdf5", monitor='val_loss', save_weights_only=False, period=3)]
+# history3 = model3.fit_generator(train_gen,
+#                                 steps_per_epoch=100,#n_train // batch_size,
+#                                 epochs=5,
+#                                 verbose=1,
+#                                 callbacks=cb3,
+#                                 validation_data=valid_gen,
+#                                 validation_steps=20)
+
+# cb4 = [ModelCheckpoint("model4.hdf5", monitor='val_loss', save_weights_only=False, period=3)]
+# history4 = model4.fit_generator(train_gen,
+#                                 steps_per_epoch=100,#n_train // batch_size,
+#                                 epochs=5,
+#                                 verbose=1,
+#                                 callbacks=cb4,
+#                                 validation_data=valid_gen,
+#                                 validation_steps=20)
 
 
 
